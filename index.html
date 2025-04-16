@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Escala de Intensidad Continua</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+      max-width: 700px;
+      margin: auto;
+    }
+    h2 {
+      text-align: center;
+    }
+    .slider-container {
+      position: relative;
+      margin: 40px 0 20px;
+    }
+    .slider {
+      width: 100%;
+    }
+    .value-display {
+      font-size: 18px;
+      margin-top: 10px;
+      text-align: center;
+    }
+    .labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+    button {
+      margin: 10px 5px;
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      background-color: #007bff;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    .status {
+      text-align: center;
+      margin: 10px 0;
+      font-size: 14px;
+      color: #666;
+    }
+    #connectionStatus {
+      padding: 5px 10px;
+      border-radius: 3px;
+    }
+    .online {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .offline {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <h2>Escala de Intensidad (0.00 a 100.00)</h2>
+  
+  <div class="status">
+    Estado de conexión: <span id="connectionStatus">Comprobando...</span>
+  </div>
+
+  <div class="slider-container">
+    <input type="range" id="slider" class="slider" min="0" max="100" step="0.01" value="50.00" oninput="actualizarValor(this.value)">
+    <div class="value-display">Valor seleccionado: <span id="valor">50.00</span></div>
+  </div>
+
+  <div class="labels">
+    <span>Apenas detectable</span>
+    <span>Débil</span>
+    <span>Moderada</span>
+    <span>Fuerte</span>
+    <span>Muy fuerte</span>
+    <span>Lo más fuerte imaginable</span>
+  </div>
+
+  <div style="text-align: center;">
+    <button onclick="guardarRespuesta()">Guardar respuesta</button>
+    <button onclick="exportarCSV()">Exportar respuestas (CSV)</button>
+    <button onclick="mostrarRespuestas()">Mostrar respuestas</button>
+  </div>
+
+  <div id="respuestasContainer" style="margin-top: 20px;"></div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Configuración de Firebase (versión gratuita)
+    const firebaseConfig = {
+      apiKey: "TU_API_KEY",
+      authDomain: "TU_DOMINIO.firebaseapp.com",
+      projectId: "TU_PROJECT_ID",
+      storageBucket: "TU_BUCKET.appspot.com",
+      messagingSenderId: "TU_SENDER_ID",
+      appId: "TU_APP_ID"
+    };
+
+    // Inicializar Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // Variables de estado
+    let isOnline = navigator.onLine;
+    const statusElement = document.getElementById('connectionStatus');
+
+    // Actualizar estado de conexión
+    function updateConnectionStatus() {
+      isOnline = navigator.onLine;
+      if (isOnline) {
+        statusElement.textContent = "En línea ✔";
+        statusElement.className = "online";
+        sincronizarRespuestas(); // Intentar sincronizar cuando se recupera la conexión
+      } else {
+        statusElement.textContent = "Sin conexión (trabajando localmente) ✖";
+        statusElement.className = "offline";
+      }
+    }
+
+    // Eventos de conexión
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+    updateConnectionStatus(); // Estado inicial
+
+    // Función para actualizar el valor mostrado
+    function actualizarValor(val) {
+      document.getElementById("valor").textContent = parseFloat(val).toFixed(2);
+    }
+
+    // Función para guardar respuestas
+    async function guardarRespuesta() {
+      const valor = parseFloat(document.getElementById("slider").value).toFixed(2);
+      const timestamp = new Date().toISOString();
+      
+      const respuesta = {
+        valor: parseFloat(valor),
+        timestamp: timestamp,
+        sincronizado: isOnline // Marcamos si estaba en línea al guardar
+      };
+
+      // Guardar localmente siempre
+      let almacenadas = JSON.parse(localStorage.getItem('respuestas')) || [];
+      almacenadas.push(respuesta);
+      localStorage.setItem('respuestas', JSON.stringify(almacenadas));
+
+      // Si estamos en línea, guardar en Firebase también
+      if (isOnline) {
+        try {
+          await db.collection("respuestas").add(respuesta);
+          respuesta.sincronizado = true;
+          // Actualizar en localStorage para marcar como sincronizado
+          almacenadas[almacenadas.length - 1].sincronizado = true;
+          localStorage.setItem('respuestas', JSON.stringify(almacenadas));
+        } catch (err) {
+          console.error("Error al guardar en Firebase:", err);
+        }
+      }
+
+      alert(`Respuesta guardada: ${valor} (${isOnline ? 'En línea' : 'Localmente'})`);
+      mostrarRespuestas(); // Actualizar la visualización
+    }
+
+    // Función para sincronizar respuestas pendientes
+    async function sincronizarRespuestas() {
+      if (!isOnline) return;
+
+      let almacenadas = JSON.parse(localStorage.getItem('respuestas')) || [];
+      if (almacenadas.length === 0) return;
+
+      // Filtrar respuestas no sincronizadas
+      const pendientes = almacenadas.filter(r => !r.sincronizado);
+      if (pendientes.length === 0) return;
+
+      try {
+        for (let r of pendientes) {
+          await db.collection("respuestas").add(r);
+          r.sincronizado = true; // Marcamos como sincronizado
+        }
+        
+        // Actualizar localStorage con el estado de sincronización
+        localStorage.setItem('respuestas', JSON.stringify(almacenadas));
+        
+        console.log(`${pendientes.length} respuestas sincronizadas con Firebase.`);
+      } catch (err) {
+        console.error("Error al sincronizar:", err);
+      }
+    }
+
+    // Función para exportar a CSV
+    function exportarCSV() {
+      let almacenadas = JSON.parse(localStorage.getItem('respuestas')) || [];
+      if (almacenadas.length === 0) {
+        alert("No hay respuestas guardadas.");
+        return;
+      }
+
+      const encabezado = "Valor,Fecha,Sincronizado\n";
+      const filas = almacenadas.map(r => `${r.valor},${r.timestamp},${r.sincronizado ? 'Sí' : 'No'}`).join("\n");
+      const csv = encabezado + filas;
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `respuestas_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // Función para mostrar las respuestas guardadas
+    function mostrarRespuestas() {
+      const container = document.getElementById('respuestasContainer');
+      let almacenadas = JSON.parse(localStorage.getItem('respuestas')) || [];
+      
+      if (almacenadas.length === 0) {
+        container.innerHTML = "<p>No hay respuestas guardadas aún.</p>";
+        return;
+      }
+
+      let html = "<h3>Respuestas guardadas:</h3><ul>";
+      almacenadas.forEach((r, i) => {
+        const fecha = new Date(r.timestamp).toLocaleString();
+        const sincro = r.sincronizado ? '✔' : '✖ (pendiente)';
+        html += `<li>${i+1}. Valor: ${r.valor.toFixed(2)} - ${fecha} ${sincro}</li>`;
+      });
+      html += `</ul><p>Total: ${almacenadas.length} respuestas (${almacenadas.filter(r => r.sincronizado).length} sincronizadas)</p>`;
+      
+      container.innerHTML = html;
+    }
+
+    // Inicializar mostrando las respuestas
+    mostrarRespuestas();
+  </script>
+</body>
+</html>
